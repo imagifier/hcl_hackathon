@@ -33,7 +33,7 @@ public class WarehouseResourceImpl implements WarehouseResource {
   public List<Warehouse> listAllWarehousesUnits() {
     return warehouseRepository.getAll().stream().map(this::toWarehouseResponse).toList();
   }
-
+//
   @Override
   @Transactional
   public Warehouse createANewWarehouseUnit(@NotNull Warehouse data) {
