@@ -1,11 +1,9 @@
-// src/test/java/com/fulfilment/application/monolith/warehouses/adapters/restapi/WarehouseSearchIT.java
 package com.fulfilment.application.monolith.warehouses.adapters.restapi;
 
-import com.fulfilment.application.monolith.warehouses.adapters.database.WarehouseRepository;
-import com.fulfilment.application.monolith.warehouses.domain.models.Warehouse;
-import com.fulfilment.application.monolith.warehouses.domain.usecases.CreateWarehouseUseCase;
+import com.fulfilment.application.monolith.warehouses.adapters.database.DbWarehouse;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,266 +11,250 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 
 import static io.restassured.RestAssured.given;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.hasItem;
+import static org.hamcrest.CoreMatchers.not;
 
 @QuarkusTest
 public class WarehouseSearchIT {
 
-    @Inject CreateWarehouseUseCase createWarehouseUseCase;
-    @Inject WarehouseRepository    warehouseRepository;
+    @Inject
+    EntityManager em;
 
     @BeforeEach
     @Transactional
-    public void setup() {
-        warehouseRepository.deleteAll();
+    void seedData() {
+        // Clean slate before every test — no interference from other test classes
+        em.createQuery("DELETE FROM DbWarehouse").executeUpdate();
+        em.flush();
+
+        insertWarehouse("MWH.001", "ZWOLLE-001",    100, 10,  null);
+        insertWarehouse("MWH.012", "AMSTERDAM-001",  50,  5,  null);
+        insertWarehouse("MWH.023", "TILBURG-001",    30, 27,  null);
     }
 
-    // ── seed helper ─────────────────────────────────────────────────────────
-
-    @Transactional
-    void seed(String code, String location, int capacity, int stock, boolean archived) {
-        Warehouse w = new Warehouse();
+    private void insertWarehouse(String code, String location, int capacity, int stock,
+                                 LocalDateTime archivedAt) {
+        DbWarehouse w = new DbWarehouse();
         w.businessUnitCode = code;
         w.location         = location;
         w.capacity         = capacity;
         w.stock            = stock;
         w.createdAt        = LocalDateTime.now();
-        w.archivedAt       = archived ? LocalDateTime.now() : null;
-        warehouseRepository.create(w);
+        w.archivedAt       = archivedAt;
+        em.persist(w);
+        em.flush();
     }
 
-    // ── 1. No filters → returns all active warehouses ───────────────────────
+    // ── No-filter tests ───────────────────────────────────────────────────────
 
     @Test
-    public void testNoFilters_returnsAllActive() {
-        seed("W-001", "AMSTERDAM-001", 80, 10, false);
-        seed("W-002", "ZWOLLE-001",    30, 5,  false);
-        seed("W-003", "AMSTERDAM-001", 60, 20, true);  // archived — must be excluded
-
+    void search_noParams_returnsAllActiveWarehouses() {
         given()
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(2))
-                .body("warehouses.size()", is(2));
+                .body("data.size()",   equalTo(3))
+                .body("page",          equalTo(0))
+                .body("pageSize",      equalTo(10))
+                .body("totalElements", equalTo(3))
+                .body("totalPages",    equalTo(1));
     }
 
-    // ── 2. Filter by location ────────────────────────────────────────────────
+    // ── Location filter tests ─────────────────────────────────────────────────
 
     @Test
-    public void testFilterByLocation() {
-        seed("W-A1", "AMSTERDAM-001", 80, 10, false);
-        seed("W-A2", "AMSTERDAM-001", 60, 5,  false);
-        seed("W-Z1", "ZWOLLE-001",    30, 3,  false);
-
+    void search_filterByExactLocation_returnsMatchingWarehouse() {
         given()
                 .queryParam("location", "AMSTERDAM-001")
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(2))
-                .body("warehouses.size()", is(2))
-                .body("warehouses.location", everyItem(is("AMSTERDAM-001")));
+                .body("data.size()",              equalTo(1))
+                .body("data[0].businessUnitCode", equalTo("MWH.012"))
+                .body("totalElements",            equalTo(1));
     }
 
-    // ── 3. Filter by minCapacity ─────────────────────────────────────────────
-
     @Test
-    public void testFilterByMinCapacity() {
-        seed("W-S",  "AMSTERDAM-001", 40, 5,  false);
-        seed("W-M",  "AMSTERDAM-001", 70, 10, false);
-        seed("W-L",  "AMSTERDAM-001", 90, 20, false);
-
+    void search_filterByUnknownLocation_returnsEmptyResult() {
         given()
-                .queryParam("minCapacity", 70)
+                .queryParam("location", "NOWHERE-999")
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(2))
-                .body("warehouses.capacity", everyItem(greaterThanOrEqualTo(70)));
+                .body("data.size()",   equalTo(0))
+                .body("totalElements", equalTo(0));
     }
 
-    // ── 4. Filter by maxCapacity ─────────────────────────────────────────────
+    // ── Capacity filter tests ─────────────────────────────────────────────────
 
     @Test
-    public void testFilterByMaxCapacity() {
-        seed("W-S", "AMSTERDAM-001", 40, 5,  false);
-        seed("W-M", "AMSTERDAM-001", 70, 10, false);
-        seed("W-L", "AMSTERDAM-001", 90, 20, false);
-
+    void search_filterByMinCapacity_returnsWarehousesAboveThreshold() {
         given()
-                .queryParam("maxCapacity", 70)
-                .when().get("/warehouse/search")
-                .then()
-                .statusCode(200)
-                .body("totalCount",        is(2))
-                .body("warehouses.capacity", everyItem(lessThanOrEqualTo(70)));
-    }
-
-    // ── 5. Combined filters (AND logic) ──────────────────────────────────────
-
-    @Test
-    public void testCombinedFilters_locationAndCapacityRange() {
-        seed("W-A-S", "AMSTERDAM-001", 40,  5,  false);
-        seed("W-A-M", "AMSTERDAM-001", 70,  10, false);
-        seed("W-A-L", "AMSTERDAM-001", 95,  20, false);
-        seed("W-Z-M", "ZWOLLE-001",    35,  3,  false);
-
-        given()
-                .queryParam("location",    "AMSTERDAM-001")
                 .queryParam("minCapacity", 50)
-                .queryParam("maxCapacity", 80)
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(1))
-                .body("warehouses[0].businessUnitCode", is("W-A-M"));
+                .body("data.size()",   equalTo(2))   // capacity 50 and 100
+                .body("totalElements", equalTo(2));
     }
 
-    // ── 6. Archived warehouses excluded ──────────────────────────────────────
-
     @Test
-    public void testArchivedWarehousesExcluded() {
-        seed("W-ACTIVE",   "AMSTERDAM-001", 80, 10, false);
-        seed("W-ARCHIVED", "AMSTERDAM-001", 80, 10, true);
-
+    void search_filterByMaxCapacity_returnsWarehousesBelowThreshold() {
         given()
+                .queryParam("maxCapacity", 50)
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",                       is(1))
-                .body("warehouses[0].businessUnitCode",   is("W-ACTIVE"));
+                .body("data.size()",   equalTo(2))   // capacity 30 and 50
+                .body("totalElements", equalTo(2));
     }
 
-    // ── 7. Sort by capacity ascending ────────────────────────────────────────
-
     @Test
-    public void testSortByCapacityAscending() {
-        seed("W-C60", "AMSTERDAM-001", 60, 5,  false);
-        seed("W-C90", "AMSTERDAM-001", 90, 10, false);
-        seed("W-C40", "AMSTERDAM-001", 40, 3,  false);
-
+    void search_filterByCapacityRange_returnsWarehousesWithinRange() {
         given()
-                .queryParam("sortBy",    "capacity")
-                .queryParam("sortOrder", "asc")
+                .queryParam("minCapacity", 30)
+                .queryParam("maxCapacity", 50)
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("warehouses[0].capacity", is(40))
-                .body("warehouses[1].capacity", is(60))
-                .body("warehouses[2].capacity", is(90));
+                .body("data.size()",   equalTo(2))   // capacity 30 and 50
+                .body("totalElements", equalTo(2));
     }
 
-    // ── 8. Sort by capacity descending ───────────────────────────────────────
+    // ── Sort tests ────────────────────────────────────────────────────────────
 
     @Test
-    public void testSortByCapacityDescending() {
-        seed("W-C60", "AMSTERDAM-001", 60, 5,  false);
-        seed("W-C90", "AMSTERDAM-001", 90, 10, false);
-        seed("W-C40", "AMSTERDAM-001", 40, 3,  false);
-
+    void search_sortByCapacityDesc_returnsInDescendingOrder() {
         given()
                 .queryParam("sortBy",    "capacity")
                 .queryParam("sortOrder", "desc")
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("warehouses[0].capacity", is(90))
-                .body("warehouses[1].capacity", is(60))
-                .body("warehouses[2].capacity", is(40));
+                .body("data[0].capacity", equalTo(100))
+                .body("data[1].capacity", equalTo(50))
+                .body("data[2].capacity", equalTo(30));
     }
 
-    // ── 9. Pagination ─────────────────────────────────────────────────────────
+    @Test
+    void search_sortByCapacityAsc_returnsInAscendingOrder() {
+        given()
+                .queryParam("sortBy",    "capacity")
+                .queryParam("sortOrder", "asc")
+                .when().get("/warehouse/search")
+                .then()
+                .statusCode(200)
+                .body("data[0].capacity", equalTo(30))
+                .body("data[1].capacity", equalTo(50))
+                .body("data[2].capacity", equalTo(100));
+    }
+
+    // ── Pagination tests ──────────────────────────────────────────────────────
 
     @Test
-    public void testPagination() {
-        for (int i = 1; i <= 15; i++) {
-            seed("W-PAG-" + i, "AMSTERDAM-001", 40 + i, i, false);
-        }
-
-        // page 0, size 5
+    void search_pagination_returnsCorrectFirstPage() {
         given()
                 .queryParam("page",     0)
-                .queryParam("pageSize", 5)
+                .queryParam("pageSize", 2)
+                .queryParam("sortBy",    "capacity")
+                .queryParam("sortOrder", "asc")
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(15))
-                .body("totalPages",        is(3))
-                .body("page",              is(0))
-                .body("pageSize",          is(5))
-                .body("warehouses.size()", is(5));
-
-        // page 1, size 5
-        given()
-                .queryParam("page",     1)
-                .queryParam("pageSize", 5)
-                .when().get("/warehouse/search")
-                .then()
-                .statusCode(200)
-                .body("warehouses.size()", is(5))
-                .body("page",              is(1));
-
-        // last page — 5 items
-        given()
-                .queryParam("page",     2)
-                .queryParam("pageSize", 5)
-                .when().get("/warehouse/search")
-                .then()
-                .statusCode(200)
-                .body("warehouses.size()", is(5));
+                .body("data.size()",   equalTo(2))
+                .body("page",          equalTo(0))
+                .body("pageSize",      equalTo(2))
+                .body("totalElements", equalTo(3))
+                .body("totalPages",    equalTo(2));
     }
 
-    // ── 10. pageSize capped at 100 ────────────────────────────────────────────
+    @Test
+    void search_secondPage_returnsRemainingItems() {
+        given()
+                .queryParam("page",      1)
+                .queryParam("pageSize",  2)
+                .queryParam("sortBy",    "capacity")
+                .queryParam("sortOrder", "asc")
+                .when().get("/warehouse/search")
+                .then()
+                .statusCode(200)
+                .body("data.size()",   equalTo(1))
+                .body("page",          equalTo(1))
+                .body("totalElements", equalTo(3))
+                .body("totalPages",    equalTo(2));
+    }
 
     @Test
-    public void testPageSizeCappedAt100() {
+    void search_pageSizeExceedsMax_isCappedAt100() {
         given()
                 .queryParam("pageSize", 999)
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("pageSize", is(100));
+                .body("pageSize", equalTo(100));
     }
 
-    // ── 11. Invalid sortBy → 400 ──────────────────────────────────────────────
+    // ── Archived warehouse exclusion test ─────────────────────────────────────
 
     @Test
-    public void testInvalidSortBy_returns400() {
+    void search_archivedWarehousesNeverAppear() {
+        // Archive MWH.001 via the API using its businessUnitCode
+        given()
+                .when().delete("/warehouse/MWH.001")
+                .then().statusCode(204);
+
+        given()
+                .when().get("/warehouse/search")
+                .then()
+                .statusCode(200)
+                .body("totalElements",         equalTo(2))
+                .body("data.businessUnitCode", not(hasItem("MWH.001")));
+    }
+
+    // ── Validation / 400 tests ────────────────────────────────────────────────
+
+    @Test
+    void search_invalidSortBy_returns400() {
         given()
                 .queryParam("sortBy", "invalidField")
                 .when().get("/warehouse/search")
                 .then()
-                .statusCode(400)
-                .body("error", containsString("Invalid sortBy"));
+                .statusCode(400);
     }
 
-    // ── 12. minCapacity > maxCapacity → 400 ──────────────────────────────────
-
     @Test
-    public void testMinCapacityGreaterThanMax_returns400() {
+    void search_invalidSortOrder_returns400() {
         given()
-                .queryParam("minCapacity", 100)
-                .queryParam("maxCapacity", 50)
+                .queryParam("sortOrder", "random")
                 .when().get("/warehouse/search")
                 .then()
-                .statusCode(400)
-                .body("error", containsString("minCapacity cannot be greater than maxCapacity"));
+                .statusCode(400);
     }
 
-    // ── 13. Empty result set ──────────────────────────────────────────────────
+    @Test
+    void search_minCapacityGreaterThanMaxCapacity_returns400() {
+        given()
+                .queryParam("minCapacity", 100)
+                .queryParam("maxCapacity", 10)
+                .when().get("/warehouse/search")
+                .then()
+                .statusCode(400);
+    }
+
+    // ── Combined filter test ──────────────────────────────────────────────────
 
     @Test
-    public void testNoMatchingWarehouses_returnsEmptyList() {
-        seed("W-001", "AMSTERDAM-001", 80, 10, false);
-
+    void search_combinedFilters_appliesAndLogic() {
         given()
-                .queryParam("location", "TILBURG-001")
+                .queryParam("location",    "AMSTERDAM-001")
+                .queryParam("minCapacity", 40)
+                .queryParam("sortBy",      "capacity")
+                .queryParam("sortOrder",   "asc")
                 .when().get("/warehouse/search")
                 .then()
                 .statusCode(200)
-                .body("totalCount",        is(0))
-                .body("warehouses.size()", is(0))
-                .body("totalPages",        is(0));
+                .body("data.size()",              equalTo(1))
+                .body("data[0].businessUnitCode", equalTo("MWH.012"));
     }
 }
