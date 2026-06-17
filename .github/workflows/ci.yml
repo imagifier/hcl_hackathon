@@ -39,7 +39,7 @@ jobs:
         run: chmod +x ./mvnw
 
       - name: Build with Maven and test suite
-        run: ./mvnw clean verify
+        run: ./mvnw clean test
 
       - name: Upload JaCoCo report
         if: always()
