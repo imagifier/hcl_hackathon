@@ -32,6 +32,8 @@ public class ProductResource {
 
   @GET
   public List<Product> get() {
+
+    LOGGER.debug("Fetching all products.");
     return productRepository.listAll(Sort.by("name"));
   }
 
@@ -40,6 +42,7 @@ public class ProductResource {
   public Product getSingle(Long id) {
     Product entity = productRepository.findById(id);
     if (entity == null) {
+      LOGGER.warn("Product not found for id: " + id);
       throw new WebApplicationException("Product with id of " + id + " does not exist.", 404);
     }
     return entity;
@@ -48,11 +51,14 @@ public class ProductResource {
   @POST
   @Transactional
   public Response create(Product product) {
+    LOGGER.info("Creating new product: " + product.name);
     if (product.id != null) {
+      LOGGER.warn("Create request rejected — id was set on request body.");
       throw new WebApplicationException("Id was invalidly set on request.", 422);
     }
 
     productRepository.persist(product);
+    LOGGER.info("Product created successfully with id: " + product.id);
     return Response.ok(product).status(201).build();
   }
 
@@ -67,6 +73,7 @@ public class ProductResource {
     Product entity = productRepository.findById(id);
 
     if (entity == null) {
+      LOGGER.warn("Update failed — product not found for id: " + id);
       throw new WebApplicationException("Product with id of " + id + " does not exist.", 404);
     }
 
@@ -76,7 +83,7 @@ public class ProductResource {
     entity.stock = product.stock;
 
     productRepository.persist(entity);
-
+    LOGGER.info("Product updated successfully for id: " + id);
     return entity;
   }
 

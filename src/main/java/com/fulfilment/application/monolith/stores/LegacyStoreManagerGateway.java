@@ -1,18 +1,24 @@
 package com.fulfilment.application.monolith.stores;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import org.jboss.logging.Logger;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 @ApplicationScoped
 public class LegacyStoreManagerGateway {
 
+  private static final Logger LOGGER = Logger.getLogger(LegacyStoreManagerGateway.class);
+
   public void createStoreOnLegacySystem(Store store) {
+    LOGGER.info("Syncing new store to legacy system: " + store.name);
     // just to emulate as this would send this to a legacy system, let's write a temp file with the
     writeToFile(store);
   }
 
   public void updateStoreOnLegacySystem(Store store) {
+    LOGGER.info("Syncing updated store to legacy system: " + store.name);
     // just to emulate as this would send this to a legacy system, let's write a temp file with the
     writeToFile(store);
   }
@@ -24,7 +30,7 @@ public class LegacyStoreManagerGateway {
 
       tempFile = Files.createTempFile(store.name, ".txt");
 
-      System.out.println("Temporary file created at: " + tempFile.toString());
+      LOGGER.debug("Temporary file created at: " + tempFile);
 
       // Step 2: Write data to the temporary file
       String content =
